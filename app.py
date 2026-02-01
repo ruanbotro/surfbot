@@ -107,6 +107,43 @@ def assess_surf(wave_height: float, wave_period: float, wind_speed: float) -> di
     return {"good_surf": good_surf, "reasons": reasons}
 
 
+def is_number(value: object) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def pick_nearest_valid_index(
+    start_index: int,
+    wave_heights: list[object],
+    wave_periods: list[object],
+    wind_speeds: list[object],
+) -> int | None:
+    max_len = max(len(wave_heights), len(wave_periods), len(wind_speeds), 0)
+    if max_len == 0:
+        return None
+
+    def is_valid(index: int) -> bool:
+        return (
+            index < len(wave_heights)
+            and index < len(wave_periods)
+            and index < len(wind_speeds)
+            and is_number(wave_heights[index])
+            and is_number(wave_periods[index])
+            and is_number(wind_speeds[index])
+        )
+
+    if 0 <= start_index < max_len and is_valid(start_index):
+        return start_index
+
+    for offset in range(1, max_len):
+        lower = start_index - offset
+        upper = start_index + offset
+        if lower >= 0 and is_valid(lower):
+            return lower
+        if upper < max_len and is_valid(upper):
+            return upper
+    return None
+
+
 @app.get("/")
 def index() -> Response:
     return Response(
@@ -297,10 +334,25 @@ def api_surf() -> Response:
             )
 
         index = pick_closest_hour_index(times)
+        index = pick_nearest_valid_index(
+            index, wave_heights, wave_periods, wind_speeds
+        )
+        if index is None:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Surf data is temporarily unavailable from the "
+                            "forecast provider."
+                        )
+                    }
+                ),
+                502,
+            )
 
-        wave_height = wave_heights[index] if index < len(wave_heights) else 0
-        wave_period = wave_periods[index] if index < len(wave_periods) else 0
-        wind_speed = wind_speeds[index] if index < len(wind_speeds) else 0
+        wave_height = float(wave_heights[index])
+        wave_period = float(wave_periods[index])
+        wind_speed = float(wind_speeds[index])
 
         assessment = assess_surf(wave_height, wave_period, wind_speed)
 
