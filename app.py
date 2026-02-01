@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-import json
 import os
-import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 
@@ -270,9 +268,7 @@ def index() -> Response:
         const response = await fetch('/api/surf');
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(
-            data.error || 'Surf report failed to load. The server returned no details.'
-          );
+          throw new Error(data.error || response.statusText);
         }
 
         statusEl.textContent = data.statusMessage;
@@ -291,7 +287,7 @@ def index() -> Response:
           reasonsEl.appendChild(li);
         });
       } catch (error) {
-        statusEl.textContent = 'Unable to load surf report right now.';
+        statusEl.textContent = error.message;
         statusEl.classList.add('bad');
         reasonsEl.innerHTML = `<li>${error.message}</li>`;
       }
@@ -336,27 +332,8 @@ def api_surf() -> Response:
                 "station": payload["station"],
             }
         )
-    except urllib.error.URLError:
-        return (
-            jsonify(
-                {"error": "Unable to reach the surf forecast provider right now."}
-            ),
-            502,
-        )
-    except (json.JSONDecodeError, KeyError, ValueError):
-        return jsonify({"error": "Received malformed surf forecast data."}), 502
     except Exception as error:
-        return (
-            jsonify(
-                {
-                    "error": (
-                        "Unexpected error while assembling surf data: "
-                        f"{error}"
-                    )
-                }
-            ),
-            500,
-        )
+        return jsonify({"error": str(error)}), 500
 
 
 if __name__ == "__main__":
