@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
-import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
 
@@ -17,6 +16,11 @@ JACKSONVILLE = {
     "longitude": -81.6557,
 }
 
+NDBC_STATION = {
+    "id": "41012",
+    "name": "St. Augustine, FL (NDBC 41012)",
+}
+
 SURF_THRESHOLDS = {
     "min_wave_height_m": 0.8,
     "max_wave_height_m": 2.5,
@@ -26,15 +30,64 @@ SURF_THRESHOLDS = {
 
 
 def build_marine_url() -> str:
-    params = urllib.parse.urlencode(
-        {
-            "latitude": JACKSONVILLE["latitude"],
-            "longitude": JACKSONVILLE["longitude"],
-            "hourly": "wave_height,wave_period,wind_speed_10m",
-            "forecast_days": 1,
-        }
+    return (
+        "https://www.ndbc.noaa.gov/data/realtime2/"
+        f"{NDBC_STATION['id']}.txt"
     )
-    return f"https://marine-api.open-meteo.com/v1/marine?{params}"
+
+
+def parse_ndbc_realtime(data: str) -> dict:
+    lines = [line.strip() for line in data.splitlines() if line.strip()]
+    header_line = next(
+        (line for line in lines if line.startswith("#")), None
+    )
+    if header_line is None:
+        raise ValueError("Missing header row in NDBC response.")
+
+    header = header_line.lstrip("#").split()
+    values_line = next(
+        (line for line in lines if not line.startswith("#")), None
+    )
+    if values_line is None:
+        raise ValueError("Missing data row in NDBC response.")
+
+    values = values_line.split()
+    columns = {name: index for index, name in enumerate(header)}
+
+    def read_value(column: str) -> str:
+        index = columns.get(column)
+        if index is None or index >= len(values):
+            raise ValueError(f"Missing {column} field in NDBC response.")
+        return values[index]
+
+    year = int(read_value("YY"))
+    year += 2000 if year < 70 else 1900
+    month = int(read_value("MM"))
+    day = int(read_value("DD"))
+    hour = int(read_value("hh"))
+    minute = int(read_value("mm"))
+    timestamp = datetime(
+        year, month, day, hour, minute, tzinfo=timezone.utc
+    ).isoformat()
+
+    wave_height_raw = read_value("WVHT")
+    wind_speed_raw = read_value("WSPD")
+    period_raw = read_value("DPD")
+    if period_raw == "MM" and "APD" in columns:
+        period_raw = read_value("APD")
+
+    def parse_float(value: str) -> float:
+        if value == "MM":
+            raise ValueError("Missing measurement in NDBC response.")
+        return float(value)
+
+    return {
+        "time": timestamp,
+        "wave_height": parse_float(wave_height_raw),
+        "wave_period": parse_float(period_raw),
+        "wind_speed": parse_float(wind_speed_raw),
+        "station": NDBC_STATION["name"],
+    }
 
 
 def fetch_marine_forecast() -> dict:
@@ -42,33 +95,12 @@ def fetch_marine_forecast() -> dict:
     request = urllib.request.Request(
         marine_url,
         headers={
-            "User-Agent": "surfbot/1.0 (+https://open-meteo.com/)",
-            "Accept": "application/json",
+            "User-Agent": "surfbot/1.0 (+https://www.ndbc.noaa.gov/)",
+            "Accept": "text/plain",
         },
     )
     with urllib.request.urlopen(request, timeout=10) as response:
-        return json.loads(response.read().decode("utf-8"))
-
-
-def pick_closest_hour_index(times: list[str]) -> int:
-    if not times:
-        return 0
-
-    now = datetime.now(timezone.utc)
-    closest_index = 0
-    closest_diff = float("inf")
-    for index, timestamp in enumerate(times):
-        try:
-            value = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
-        except ValueError:
-            continue
-        if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
-        diff = abs((value - now).total_seconds())
-        if diff < closest_diff:
-            closest_diff = diff
-            closest_index = index
-    return closest_index
+        return parse_ndbc_realtime(response.read().decode("utf-8"))
 
 
 def assess_surf(wave_height: float, wave_period: float, wind_speed: float) -> dict:
@@ -105,43 +137,6 @@ def assess_surf(wave_height: float, wave_period: float, wind_speed: float) -> di
         )
 
     return {"good_surf": good_surf, "reasons": reasons}
-
-
-def is_number(value: object) -> bool:
-    return isinstance(value, (int, float)) and not isinstance(value, bool)
-
-
-def pick_nearest_valid_index(
-    start_index: int,
-    wave_heights: list[object],
-    wave_periods: list[object],
-    wind_speeds: list[object],
-) -> int | None:
-    max_len = max(len(wave_heights), len(wave_periods), len(wind_speeds), 0)
-    if max_len == 0:
-        return None
-
-    def is_valid(index: int) -> bool:
-        return (
-            index < len(wave_heights)
-            and index < len(wave_periods)
-            and index < len(wind_speeds)
-            and is_number(wave_heights[index])
-            and is_number(wave_periods[index])
-            and is_number(wind_speeds[index])
-        )
-
-    if 0 <= start_index < max_len and is_valid(start_index):
-        return start_index
-
-    for offset in range(1, max_len):
-        lower = start_index - offset
-        upper = start_index + offset
-        if lower >= 0 and is_valid(lower):
-            return lower
-        if upper < max_len and is_valid(upper):
-            return upper
-    return None
 
 
 @app.get("/")
@@ -232,7 +227,7 @@ def index() -> Response:
   <main class=\"card\">
     <header>
       <h1>Jacksonville Surf Conditions</h1>
-      <p>Live marine forecast for Jacksonville, FL.</p>
+        <p>Latest buoy report near Jacksonville, FL.</p>
     </header>
     <section id=\"status\" class=\"status\">Loading latest surf report...</section>
     <section class=\"metrics\">
@@ -259,7 +254,7 @@ def index() -> Response:
         <li>Loading thresholds...</li>
       </ul>
     </section>
-    <div class=\"footer\">Data source: Open-Meteo Marine API.</div>
+    <div class=\"footer\">Data source: NOAA NDBC buoy report.</div>
   </main>
 
   <script>
@@ -315,44 +310,9 @@ def api_surf() -> Response:
     try:
         payload = fetch_marine_forecast()
 
-        times = payload.get("hourly", {}).get("time", [])
-        wave_heights = payload.get("hourly", {}).get("wave_height", [])
-        wave_periods = payload.get("hourly", {}).get("wave_period", [])
-        wind_speeds = payload.get("hourly", {}).get("wind_speed_10m", [])
-
-        if not times or not wave_heights or not wave_periods or not wind_speeds:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            "Surf data is temporarily unavailable from the "
-                            "forecast provider."
-                        )
-                    }
-                ),
-                502,
-            )
-
-        index = pick_closest_hour_index(times)
-        index = pick_nearest_valid_index(
-            index, wave_heights, wave_periods, wind_speeds
-        )
-        if index is None:
-            return (
-                jsonify(
-                    {
-                        "error": (
-                            "Surf data is temporarily unavailable from the "
-                            "forecast provider."
-                        )
-                    }
-                ),
-                502,
-            )
-
-        wave_height = float(wave_heights[index])
-        wave_period = float(wave_periods[index])
-        wind_speed = float(wind_speeds[index])
+        wave_height = payload["wave_height"]
+        wave_period = payload["wave_period"]
+        wind_speed = payload["wind_speed"]
 
         assessment = assess_surf(wave_height, wave_period, wind_speed)
 
@@ -365,7 +325,7 @@ def api_surf() -> Response:
         return jsonify(
             {
                 "location": JACKSONVILLE["name"],
-                "time": times[index] if index < len(times) else None,
+                "time": payload["time"],
                 "waveHeight": wave_height,
                 "wavePeriod": wave_period,
                 "windSpeed": wind_speed,
@@ -373,6 +333,7 @@ def api_surf() -> Response:
                 "reasons": assessment["reasons"]
                 or ["All key thresholds are within the preferred surf range."],
                 "statusMessage": status_message,
+                "station": payload["station"],
             }
         )
     except urllib.error.URLError:
