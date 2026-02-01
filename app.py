@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import urllib.error
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
@@ -34,6 +35,19 @@ def build_marine_url() -> str:
         }
     )
     return f"https://marine-api.open-meteo.com/v1/marine?{params}"
+
+
+def fetch_marine_forecast() -> dict:
+    marine_url = build_marine_url()
+    request = urllib.request.Request(
+        marine_url,
+        headers={
+            "User-Agent": "surfbot/1.0 (+https://open-meteo.com/)",
+            "Accept": "application/json",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=10) as response:
+        return json.loads(response.read().decode("utf-8"))
 
 
 def pick_closest_hour_index(times: list[str]) -> int:
@@ -220,10 +234,10 @@ def index() -> Response:
 
       try {
         const response = await fetch('/api/surf');
-        if (!response.ok) {
-          throw new Error('Unable to load surf data');
-        }
         const data = await response.json();
+        if (!response.ok) {
+          throw new Error(data.error || 'Unable to load surf data');
+        }
 
         statusEl.textContent = data.statusMessage;
         statusEl.classList.remove('good', 'bad');
@@ -243,7 +257,7 @@ def index() -> Response:
       } catch (error) {
         statusEl.textContent = 'Unable to load surf report right now.';
         statusEl.classList.add('bad');
-        reasonsEl.innerHTML = '<li>Please try again later.</li>';
+        reasonsEl.innerHTML = `<li>${error.message}</li>`;
       }
     }
 
@@ -258,14 +272,25 @@ def index() -> Response:
 @app.get("/api/surf")
 def api_surf() -> Response:
     try:
-        marine_url = build_marine_url()
-        with urllib.request.urlopen(marine_url, timeout=10) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        payload = fetch_marine_forecast()
 
         times = payload.get("hourly", {}).get("time", [])
         wave_heights = payload.get("hourly", {}).get("wave_height", [])
         wave_periods = payload.get("hourly", {}).get("wave_period", [])
         wind_speeds = payload.get("hourly", {}).get("wind_speed_10m", [])
+
+        if not times or not wave_heights or not wave_periods or not wind_speeds:
+            return (
+                jsonify(
+                    {
+                        "error": (
+                            "Surf data is temporarily unavailable from the "
+                            "forecast provider."
+                        )
+                    }
+                ),
+                502,
+            )
 
         index = pick_closest_hour_index(times)
 
@@ -294,6 +319,15 @@ def api_surf() -> Response:
                 "statusMessage": status_message,
             }
         )
+    except urllib.error.URLError:
+        return (
+            jsonify(
+                {"error": "Unable to reach the surf forecast provider right now."}
+            ),
+            502,
+        )
+    except (json.JSONDecodeError, KeyError, ValueError):
+        return jsonify({"error": "Received malformed surf forecast data."}), 502
     except Exception:
         return jsonify({"error": "Unable to load surf data"}), 500
 
