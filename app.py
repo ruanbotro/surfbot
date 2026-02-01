@@ -62,6 +62,8 @@ def pick_closest_hour_index(times: list[str]) -> int:
             value = datetime.fromisoformat(timestamp.replace("Z", "+00:00"))
         except ValueError:
             continue
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
         diff = abs((value - now).total_seconds())
         if diff < closest_diff:
             closest_diff = diff
