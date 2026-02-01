@@ -236,7 +236,9 @@ def index() -> Response:
         const response = await fetch('/api/surf');
         const data = await response.json();
         if (!response.ok) {
-          throw new Error(data.error || 'Unable to load surf data');
+          throw new Error(
+            data.error || 'Surf report failed to load. The server returned no details.'
+          );
         }
 
         statusEl.textContent = data.statusMessage;
@@ -328,8 +330,18 @@ def api_surf() -> Response:
         )
     except (json.JSONDecodeError, KeyError, ValueError):
         return jsonify({"error": "Received malformed surf forecast data."}), 502
-    except Exception:
-        return jsonify({"error": "Unable to load surf data"}), 500
+    except Exception as error:
+        return (
+            jsonify(
+                {
+                    "error": (
+                        "Unexpected error while assembling surf data: "
+                        f"{error}"
+                    )
+                }
+            ),
+            500,
+        )
 
 
 if __name__ == "__main__":
