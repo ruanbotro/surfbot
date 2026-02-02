@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import urllib.request
 from datetime import datetime, timezone
 
@@ -10,156 +11,104 @@ app = Flask(__name__)
 
 JACKSONVILLE = {
     "name": "Jacksonville, FL",
-    "latitude": 30.3322,
-    "longitude": -81.6557,
+    "latitude": 30.398000,
+    "longitude": -81.428000,
 }
-
-NDBC_STATIONS = [
-    {"id": "41012", "name": "St. Augustine, FL (NDBC 41012)"},
-    {"id": "41010", "name": "Canaveral East, FL (NDBC 41010)"},
-    {"id": "41009", "name": "Canaveral Offshore, FL (NDBC 41009)"},
-]
 
 SURF_THRESHOLDS = {
-    "min_wave_height_m": 0.8,
-    "max_wave_height_m": 2.5,
+    "min_wave_height_ft": 2.5,
+    "max_wave_height_ft": 8.0,
     "min_wave_period_s": 6,
-    "max_wind_speed_mps": 10,
 }
 
 
-def build_marine_url(station_id: str) -> str:
+def build_marine_url(latitude: float, longitude: float) -> str:
     return (
-        "https://www.ndbc.noaa.gov/data/realtime2/"
-        f"{station_id}.txt"
+        "https://marine-api.open-meteo.com/v1/marine"
+        f"?latitude={latitude}"
+        f"&longitude={longitude}"
+        "&current=wave_height,wave_period,wave_direction,"
+        "sea_surface_temperature,sea_level_height_msl"
+        "&timezone=auto"
+        "&cell_selection=sea"
+        "&length_unit=imperial"
     )
-
-
-def parse_ndbc_realtime(data: str, station_name: str) -> dict:
-    lines = [line.strip() for line in data.splitlines() if line.strip()]
-    header_line = next(
-        (line for line in lines if line.startswith("#")), None
-    )
-    if header_line is None:
-        raise ValueError("Missing header row in NDBC response.")
-
-    header = header_line.lstrip("#").split()
-    values_line = next(
-        (line for line in lines if not line.startswith("#")), None
-    )
-    if values_line is None:
-        raise ValueError("Missing data row in NDBC response.")
-
-    values = values_line.split()
-    columns = {name: index for index, name in enumerate(header)}
-
-    def read_value(column: str) -> str:
-        index = columns.get(column)
-        if index is None or index >= len(values):
-            raise ValueError(f"Missing {column} field in NDBC response.")
-        return values[index]
-
-    year = int(read_value("YY"))
-    year += 2000 if year < 70 else 1900
-    month = int(read_value("MM"))
-    day = int(read_value("DD"))
-    hour = int(read_value("hh"))
-    minute = int(read_value("mm"))
-    timestamp = datetime(
-        year, month, day, hour, minute, tzinfo=timezone.utc
-    ).isoformat()
-
-    wave_height_raw = read_value("WVHT")
-    wind_speed_raw = read_value("WSPD")
-    period_raw = read_value("DPD")
-    if period_raw == "MM" and "APD" in columns:
-        period_raw = read_value("APD")
-
-    def parse_float(value: str) -> float:
-        if value == "MM":
-            raise ValueError("Missing measurement in NDBC response.")
-        return float(value)
-
-    return {
-        "time": timestamp,
-        "wave_height": parse_float(wave_height_raw),
-        "wave_period": parse_float(period_raw),
-        "wind_speed": parse_float(wind_speed_raw),
-        "station": station_name,
-    }
 
 
 def fetch_marine_forecast() -> dict:
-    errors: list[str] = []
-    for station in NDBC_STATIONS:
-        marine_url = build_marine_url(station["id"])
-        request = urllib.request.Request(
-            marine_url,
-            headers={
-                "User-Agent": "surfbot/1.0 (+https://www.ndbc.noaa.gov/)",
-                "Accept": "text/plain",
-            },
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=10) as response:
-                payload = parse_ndbc_realtime(
-                    response.read().decode("utf-8"),
-                    station["name"],
-                )
-                payload["source"] = "NOAA NDBC buoy report"
-                payload["is_fallback"] = False
-                payload["warnings"] = []
-                return payload
-        except Exception as error:
-            errors.append(f"{station['id']}: {error}")
+    marine_url = build_marine_url(
+        JACKSONVILLE["latitude"], JACKSONVILLE["longitude"]
+    )
+    request = urllib.request.Request(
+        marine_url,
+        headers={
+            "User-Agent": "surfbot/1.0 (+https://open-meteo.com/)",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
 
-    fallback_time = datetime.now(timezone.utc).isoformat()
-    return {
-        "time": fallback_time,
-        "wave_height": 1.2,
-        "wave_period": 7.0,
-        "wind_speed": 6.0,
-        "station": "Backup estimate for Jacksonville, FL",
-        "source": "Fallback estimate (local backup)",
-        "is_fallback": True,
-        "warnings": [
-            "Live buoy data is temporarily unavailable.",
-            "Displaying a resilient backup estimate to keep the dashboard running.",
-            *errors,
-        ],
-    }
+        current = payload.get("current")
+        if not current:
+            raise ValueError("Missing current conditions in response.")
+
+        return {
+            "time": current["time"],
+            "wave_height_ft": float(current["wave_height"]),
+            "wave_period_s": float(current["wave_period"]),
+            "wave_direction_deg": float(current["wave_direction"]),
+            "sea_surface_temp": float(current["sea_surface_temperature"]),
+            "sea_level_height_ft": float(current["sea_level_height_msl"]),
+            "station": f"{JACKSONVILLE['name']} (Open-Meteo)",
+            "source": "Open-Meteo Marine API",
+            "is_fallback": False,
+            "warnings": [],
+        }
+    except Exception as error:
+        fallback_time = datetime.now(timezone.utc).isoformat()
+        return {
+            "time": fallback_time,
+            "wave_height_ft": 3.5,
+            "wave_period_s": 7.0,
+            "wave_direction_deg": 95.0,
+            "sea_surface_temp": 26.0,
+            "sea_level_height_ft": 0.7,
+            "station": "Backup estimate for Jacksonville, FL",
+            "source": "Fallback estimate (local backup)",
+            "is_fallback": True,
+            "warnings": [
+                "Live marine data is temporarily unavailable.",
+                "Displaying a resilient backup estimate to keep the dashboard running.",
+                str(error),
+            ],
+        }
 
 
-def assess_surf(wave_height: float, wave_period: float, wind_speed: float) -> dict:
+def assess_surf(wave_height: float, wave_period: float) -> dict:
     meets_wave_height = (
-        SURF_THRESHOLDS["min_wave_height_m"]
+        SURF_THRESHOLDS["min_wave_height_ft"]
         <= wave_height
-        <= SURF_THRESHOLDS["max_wave_height_m"]
+        <= SURF_THRESHOLDS["max_wave_height_ft"]
     )
     meets_wave_period = wave_period >= SURF_THRESHOLDS["min_wave_period_s"]
-    meets_wind = wind_speed <= SURF_THRESHOLDS["max_wind_speed_mps"]
 
-    good_surf = meets_wave_height and meets_wave_period and meets_wind
+    good_surf = meets_wave_height and meets_wave_period
     reasons: list[str] = []
 
     if not meets_wave_height:
         reasons.append(
-            "Wave height ({:.1f} m) should be between {} and {} m.".format(
+            "Wave height ({:.1f} ft) should be between {} and {} ft.".format(
                 wave_height,
-                SURF_THRESHOLDS["min_wave_height_m"],
-                SURF_THRESHOLDS["max_wave_height_m"],
+                SURF_THRESHOLDS["min_wave_height_ft"],
+                SURF_THRESHOLDS["max_wave_height_ft"],
             )
         )
     if not meets_wave_period:
         reasons.append(
             "Wave period ({:.0f} s) should be at least {} s.".format(
                 wave_period, SURF_THRESHOLDS["min_wave_period_s"]
-            )
-        )
-    if not meets_wind:
-        reasons.append(
-            "Wind speed ({:.1f} m/s) should be below {} m/s.".format(
-                wind_speed, SURF_THRESHOLDS["max_wind_speed_mps"]
             )
         )
 
@@ -254,7 +203,7 @@ def index() -> Response:
   <main class=\"card\">
     <header>
       <h1>Jacksonville Surf Conditions</h1>
-        <p>Latest buoy report near Jacksonville, FL.</p>
+        <p>Latest marine snapshot near Jacksonville, FL.</p>
     </header>
     <section id=\"status\" class=\"status\">Loading latest surf report...</section>
     <section class=\"metrics\">
@@ -267,8 +216,16 @@ def index() -> Response:
         <strong id=\"wave-period\">--</strong>
       </div>
       <div class=\"metric\">
-        <span>Wind Speed</span>
-        <strong id=\"wind-speed\">--</strong>
+        <span>Wave Direction</span>
+        <strong id=\"wave-direction\">--</strong>
+      </div>
+      <div class=\"metric\">
+        <span>Sea Surface Temp</span>
+        <strong id=\"sea-surface-temp\">--</strong>
+      </div>
+      <div class=\"metric\">
+        <span>Sea Level Height</span>
+        <strong id=\"sea-level-height\">--</strong>
       </div>
       <div class=\"metric\">
         <span>Data Time</span>
@@ -289,18 +246,22 @@ def index() -> Response:
       const statusEl = document.getElementById('status');
       const waveHeightEl = document.getElementById('wave-height');
       const wavePeriodEl = document.getElementById('wave-period');
-      const windSpeedEl = document.getElementById('wind-speed');
+      const waveDirectionEl = document.getElementById('wave-direction');
+      const seaSurfaceTempEl = document.getElementById('sea-surface-temp');
+      const seaLevelHeightEl = document.getElementById('sea-level-height');
       const dataTimeEl = document.getElementById('data-time');
       const reasonsEl = document.getElementById('reasons');
       const sourceEl = document.getElementById('data-source');
       const fallbackPayload = {
         time: new Date().toISOString(),
-        waveHeight: 1.2,
+        waveHeight: 3.5,
         wavePeriod: 7.0,
-        windSpeed: 6.0,
+        waveDirection: 95.0,
+        seaSurfaceTemp: 26.0,
+        seaLevelHeight: 0.7,
         goodSurf: true,
         reasons: [
-          'Live buoy data is temporarily unavailable.',
+          'Live marine data is temporarily unavailable.',
           'Showing the most reliable backup estimate.',
         ],
         statusMessage: 'Backup data loaded — surf estimate only.',
@@ -319,9 +280,11 @@ def index() -> Response:
         statusEl.classList.remove('good', 'bad');
         statusEl.classList.add(data.goodSurf ? 'good' : 'bad');
 
-        waveHeightEl.textContent = `${data.waveHeight.toFixed(1)} m`;
+        waveHeightEl.textContent = `${data.waveHeight.toFixed(1)} ft`;
         wavePeriodEl.textContent = `${data.wavePeriod.toFixed(0)} s`;
-        windSpeedEl.textContent = `${data.windSpeed.toFixed(1)} m/s`;
+        waveDirectionEl.textContent = `${data.waveDirection.toFixed(0)}°`;
+        seaSurfaceTempEl.textContent = `${data.seaSurfaceTemp.toFixed(1)}°C`;
+        seaLevelHeightEl.textContent = `${data.seaLevelHeight.toFixed(1)} ft`;
         dataTimeEl.textContent = new Date(data.time).toLocaleString();
 
         reasonsEl.innerHTML = '';
@@ -330,14 +293,16 @@ def index() -> Response:
           li.textContent = reason;
           reasonsEl.appendChild(li);
         });
-        sourceEl.textContent = `Data source: ${data.source || 'NOAA NDBC buoy report'}`;
+        sourceEl.textContent = `Data source: ${data.source || 'Open-Meteo Marine API'}`;
       } catch (error) {
         statusEl.textContent = fallbackPayload.statusMessage;
         statusEl.classList.remove('bad');
         statusEl.classList.add('good');
-        waveHeightEl.textContent = `${fallbackPayload.waveHeight.toFixed(1)} m`;
+        waveHeightEl.textContent = `${fallbackPayload.waveHeight.toFixed(1)} ft`;
         wavePeriodEl.textContent = `${fallbackPayload.wavePeriod.toFixed(0)} s`;
-        windSpeedEl.textContent = `${fallbackPayload.windSpeed.toFixed(1)} m/s`;
+        waveDirectionEl.textContent = `${fallbackPayload.waveDirection.toFixed(0)}°`;
+        seaSurfaceTempEl.textContent = `${fallbackPayload.seaSurfaceTemp.toFixed(1)}°C`;
+        seaLevelHeightEl.textContent = `${fallbackPayload.seaLevelHeight.toFixed(1)} ft`;
         dataTimeEl.textContent = new Date(
           fallbackPayload.time
         ).toLocaleString();
@@ -364,11 +329,13 @@ def api_surf() -> Response:
     try:
         payload = fetch_marine_forecast()
 
-        wave_height = payload["wave_height"]
-        wave_period = payload["wave_period"]
-        wind_speed = payload["wind_speed"]
+        wave_height = payload["wave_height_ft"]
+        wave_period = payload["wave_period_s"]
+        wave_direction = payload["wave_direction_deg"]
+        sea_surface_temp = payload["sea_surface_temp"]
+        sea_level_height = payload["sea_level_height_ft"]
 
-        assessment = assess_surf(wave_height, wave_period, wind_speed)
+        assessment = assess_surf(wave_height, wave_period)
 
         if payload.get("is_fallback"):
             status_message = "Backup data loaded — surf estimate only."
@@ -391,12 +358,14 @@ def api_surf() -> Response:
                 "time": payload["time"],
                 "waveHeight": wave_height,
                 "wavePeriod": wave_period,
-                "windSpeed": wind_speed,
+                "waveDirection": wave_direction,
+                "seaSurfaceTemp": sea_surface_temp,
+                "seaLevelHeight": sea_level_height,
                 "goodSurf": assessment["good_surf"],
                 "reasons": reasons,
                 "statusMessage": status_message,
                 "station": payload["station"],
-                "source": payload.get("source", "NOAA NDBC buoy report"),
+                "source": payload.get("source", "Open-Meteo Marine API"),
                 "isFallback": payload.get("is_fallback", False),
                 "warnings": payload.get("warnings", []),
             }
@@ -407,12 +376,14 @@ def api_surf() -> Response:
             {
                 "location": JACKSONVILLE["name"],
                 "time": fallback_time,
-                "waveHeight": 1.2,
+                "waveHeight": 3.5,
                 "wavePeriod": 7.0,
-                "windSpeed": 6.0,
+                "waveDirection": 95.0,
+                "seaSurfaceTemp": 26.0,
+                "seaLevelHeight": 0.7,
                 "goodSurf": True,
                 "reasons": [
-                    "Live buoy data is temporarily unavailable.",
+                    "Live marine data is temporarily unavailable.",
                     "Displaying a resilient backup estimate.",
                 ],
                 "statusMessage": "Backup data loaded — surf estimate only.",
