@@ -126,30 +126,47 @@ def index() -> Response:
   <title>Jacksonville Surf Dashboard</title>
   <style>
     :root {
-      color-scheme: light dark;
-      font-family: "Inter", system-ui, sans-serif;
-      background: #0b1220;
-      color: #f5f7ff;
+      color-scheme: light;
+      font-family: "Poppins", "Trebuchet MS", system-ui, sans-serif;
+      background: #082c3b;
+      color: #fdf6e8;
     }
     body {
       margin: 0;
       min-height: 100vh;
       display: grid;
       place-items: center;
-      background: radial-gradient(circle at top, #1b2a44, #0b1220 65%);
+      background:
+        radial-gradient(circle at 15% 10%, rgba(255, 214, 149, 0.35), transparent 45%),
+        radial-gradient(circle at 80% 15%, rgba(115, 197, 187, 0.35), transparent 45%),
+        linear-gradient(160deg, #0a4b5f 0%, #0c6a77 40%, #1c8ea2 65%, #f1d3a5 100%);
+      background-attachment: fixed;
     }
     .card {
       width: min(720px, 92vw);
       padding: 32px;
       border-radius: 20px;
-      background: rgba(15, 23, 42, 0.85);
-      box-shadow: 0 18px 40px rgba(0, 0, 0, 0.35);
+      background:
+        linear-gradient(145deg, rgba(11, 68, 80, 0.95), rgba(7, 41, 54, 0.95)),
+        url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160' viewBox='0 0 160 160'%3E%3Cpath fill='none' stroke='rgba(255,214,149,0.15)' stroke-width='2' d='M0 40h160M0 80h160M0 120h160'/%3E%3C/svg%3E");
+      border: 2px solid rgba(255, 214, 149, 0.5);
+      box-shadow:
+        0 24px 50px rgba(5, 30, 38, 0.45),
+        inset 0 0 0 1px rgba(255, 214, 149, 0.2);
       display: grid;
       gap: 20px;
     }
     h1 {
       margin: 0;
-      font-size: 2rem;
+      font-size: 2.2rem;
+      letter-spacing: 0.02em;
+    }
+    .tagline {
+      margin: 6px 0 0;
+      font-size: 0.95rem;
+      color: rgba(253, 246, 232, 0.8);
+      text-transform: uppercase;
+      letter-spacing: 0.18em;
     }
     .status {
       padding: 16px 20px;
@@ -161,14 +178,14 @@ def index() -> Response:
       gap: 12px;
     }
     .status.good {
-      background: rgba(16, 185, 129, 0.2);
-      border: 1px solid rgba(16, 185, 129, 0.4);
-      color: #d1fae5;
+      background: rgba(255, 214, 149, 0.22);
+      border: 1px solid rgba(255, 214, 149, 0.6);
+      color: #fff1d6;
     }
     .status.bad {
-      background: rgba(248, 113, 113, 0.2);
-      border: 1px solid rgba(248, 113, 113, 0.4);
-      color: #fee2e2;
+      background: rgba(255, 141, 112, 0.25);
+      border: 1px solid rgba(255, 141, 112, 0.5);
+      color: #ffe0d5;
     }
     .metrics {
       display: grid;
@@ -177,13 +194,14 @@ def index() -> Response:
     }
     .metric {
       padding: 14px 16px;
-      background: rgba(30, 41, 59, 0.7);
+      background: rgba(10, 52, 64, 0.75);
+      border: 1px solid rgba(255, 214, 149, 0.25);
       border-radius: 14px;
     }
     .metric span {
       display: block;
       font-size: 0.85rem;
-      opacity: 0.7;
+      opacity: 0.75;
     }
     .metric strong {
       font-size: 1.2rem;
@@ -203,7 +221,8 @@ def index() -> Response:
   <main class=\"card\">
     <header>
       <h1>Jacksonville Surf Conditions</h1>
-        <p>Latest marine snapshot near Jacksonville, FL.</p>
+      <p class="tagline">Aloha swell report</p>
+      <p>Latest marine snapshot near Jacksonville, FL.</p>
     </header>
     <section id=\"status\" class=\"status\">Loading latest surf report...</section>
     <section class=\"metrics\">
